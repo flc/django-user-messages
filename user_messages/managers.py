@@ -1,15 +1,21 @@
 from django.db.models import Manager
 
-from user_messages.signals import message_sent
+from .signals import message_sent
+from .utils import get_m2m_exact_match
 
 
 class ThreadManager(Manager):
 
     def inbox(self, user):
-        return self.filter(userthread__user=user, userthread__deleted=False)
+        return self.filter(
+            userthread__user=user,
+            userthread__deleted=False,
+            )
 
     def unread(self, user):
-        return self.filter(userthread__user=user, userthread__deleted=False, userthread__unread=True)
+        return self.inbox(user).filter(
+            userthread__unread=True,
+            )
 
 
 class MessageManager(Manager):
@@ -20,12 +26,30 @@ class MessageManager(Manager):
         message_sent.send(sender=self.model, message=msg, thread=thread, reply=True)
         return msg
 
-    def new_message(self, from_user, to_users, subject, content):
+    def new_message(self, from_user, to_users, content):
         from user_messages.models import Thread
-        thread = Thread.objects.create(subject=subject)
-        for user in to_users:
-            thread.userthread_set.create(user=user, deleted=False, unread=True)
-        thread.userthread_set.create(user=from_user, deleted=True, unread=False)
+
+        try:
+            # XXX performance
+            user_ids = [u.id for u in to_users]
+            user_ids.append(from_user.id)
+            thread = get_m2m_exact_match(Thread, "users", user_ids)[0]
+            reply = False
+        except IndexError as e:
+            thread = None
+            reply = True
+
+        if thread is None:
+            # new thread
+            thread = Thread.objects.create()
+            for user in to_users:
+                thread.userthread_set.create(user=user, deleted=False, unread=True)
+            thread.userthread_set.create(user=from_user, deleted=False, unread=False)
+
+        # create the message
         msg = self.create(thread=thread, sender=from_user, content=content)
-        message_sent.send(sender=self.model, message=msg, thread=thread, reply=False)
+
+        # send signal
+        message_sent.send(sender=self.model, message=msg, thread=thread, reply=reply)
+
         return msg
