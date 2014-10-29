@@ -29,6 +29,11 @@ class MessageManager(Manager):
     def new_message(self, from_user, to_users, content):
         from user_messages.models import Thread
 
+        # remove duplicates if any
+        to_users = set(to_users)
+        if from_user in to_users:
+            to_users.remove(from_user)
+
         try:
             # XXX performance
             user_ids = [u.id for u in to_users]
